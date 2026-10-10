@@ -18,6 +18,7 @@ param(
 
     [int]$Port = 8099,
     [int]$Tail = 40,
+    [string]$Bind = "127.0.0.1",   # 默认仅本机; 设 0.0.0.0 允许局域网访问
     [string]$TaskName = "VoxCPM2-TTS-Server"
 )
 
@@ -69,8 +70,11 @@ function Show-Status {
     $startup = [Environment]::GetFolderPath('Startup')
     $hasAuto = Test-Path (Join-Path $startup "$TaskName.lnk")
     Write-Output ("  开机自启 : {0}" -f $(if($hasAuto){"已启用"}else{"未启用"}))
-    if (Test-Path $logFile) {
-        Write-Output ("  日志     : {0}  ({1:N0} KB, 更新于 {2})" -f $logFile, ((Get-Item $logFile).Length/1KB), (Get-Item $logFile).LastWriteTime)
+    if (Test-Path $errFile) {
+        $sz = (Get-Item $errFile).Length
+        Write-Output ("  日志     : {0}  ({1:N0} 字节, 更新于 {2})" -f $errFile, $sz, (Get-Item $errFile).LastWriteTime)
+    } else {
+        Write-Output "  日志     : 尚无(首次启动后生成)"
     }
     try {
         $gpu = nvidia-smi --query-gpu=name,memory.used,memory.total,memory.free --format=csv,noheader
@@ -88,8 +92,10 @@ switch ($Action) {
         }
         New-Item -ItemType Directory -Force $logDir | Out-Null
         Write-Output "正在启动 $procName (端口 $Port) ..."
+        # 注意: llama-tts-server 的日志走 stderr(echo vlog), stdout 基本为空,
+        #      所以 server.err 才是主日志, server.log 一般保持 0KB。
         Start-Process -FilePath $exe `
-            -ArgumentList @("--voxcpm2-base-lm", $base, "--voxcpm2-acoustic", $acoustic, "--port", "$Port") `
+            -ArgumentList @("--voxcpm2-base-lm", $base, "--voxcpm2-acoustic", $acoustic, "--port", "$Port", "--host", $Bind) `
             -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errFile | Out-Null
         $ok = $false
         for ($i = 0; $i -lt 60; $i++) {
@@ -102,7 +108,13 @@ switch ($Action) {
             Write-Progress -Activity "加载模型中(约 3.3GB 权重)..." -Status "$($i*2)s"
         }
         Write-Progress -Activity "加载模型" -Completed
-        if ($ok) { Show-Status } else { Write-Error "启动超时(120s), 请检查日志"; exit 1 }
+        if ($ok) {
+            Show-Status
+            if ($Bind -eq "0.0.0.0") {
+                Write-Output "  [提示] 已绑定 0.0.0.0, 局域网可访问。若外部连不上, 需放行防火墙:" -ForegroundColor Yellow
+                Write-Output "         netsh advfirewall firewall add rule name=`"VoxCPM2-TTS`" dir=in action=allow protocol=tcp localport=$Port" -ForegroundColor Yellow
+            }
+        } else { Write-Error "启动超时(120s), 请检查日志"; exit 1 }
     }
 
     'stop' {
@@ -118,7 +130,7 @@ switch ($Action) {
     'restart' {
         $p = Get-ServerProc
         if ($p) { $p | Stop-Process -Force; Start-Sleep -Seconds 2 }
-        & $PSCommandPath start -Port $Port
+        & $PSCommandPath start -Port $Port -Bind $Bind
     }
 
     'status' { Show-Status }
@@ -128,13 +140,20 @@ switch ($Action) {
     }
 
     'logs' {
-        if (-not (Test-Path $logFile)) { Write-Output "无日志文件"; break }
-        Write-Output "===== $logFile (最后 $Tail 行) ====="
-        Get-Content $logFile -Tail $Tail
+        $shown = $false
+        # 主日志在 stderr (llama-tts-server 用 echo vlog 输出到 stderr)
         if ((Test-Path $errFile) -and ((Get-Item $errFile).Length -gt 0)) {
-            Write-Output "`n===== $errFile (最后 $Tail 行) ====="
+            Write-Output "===== $errFile (最后 $Tail 行) ====="
             Get-Content $errFile -Tail $Tail
+            $shown = $true
         }
+        # stdout 一般空, 有内容时也显示
+        if ((Test-Path $logFile) -and ((Get-Item $logFile).Length -gt 0)) {
+            Write-Output "`n===== $logFile (最后 $Tail 行) ====="
+            Get-Content $logFile -Tail $Tail
+            $shown = $true
+        }
+        if (-not $shown) { Write-Output "暂无日志内容" }
     }
 
     'autostart' {

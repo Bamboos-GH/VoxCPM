@@ -69,8 +69,24 @@ powershell service.ps1 autostart    # 启用开机自启（启动文件夹，无
 powershell service.ps1 noautostart  # 取消开机自启
 ```
 
+**参数**：
+
+```powershell
+powershell service.ps1 start -Port 8099 -Bind 127.0.0.1   # 默认仅本机
+powershell service.ps1 start -Port 8099 -Bind 0.0.0.0     # 允许局域网访问
+```
+
+> 默认绑 `127.0.0.1`（仅本机可访问）。设 `0.0.0.0` 后局域网设备/手机可访问，但需放行 Windows 防火墙：
+> ```powershell
+> netsh advfirewall firewall add rule name="VoxCPM2-TTS" dir=in action=allow protocol=tcp localport=8099
+> ```
+> 永久生效同样要改 `autostart-hidden.vbs` 里的启动参数。
+
+> **关于日志**：`llama-tts-server` 的日志走 **stderr**（stdout 基本为空），所以 `logs/server.err` 才是主日志，`server.log` 通常保持 0KB——这是正常的，不是故障。
+> 启动其实只需约 2 秒（模型用 mmap 惰性加载，首次推理时才真正载入显存）。
+
 > 开机自启用「启动文件夹 + VBS 隐藏启动」实现，下次登录会自动静默拉起服务于 `8099` 端口。
-> 若需换端口：`powershell service.ps1 start -Port 8100`（autostart 写死 8099，需同时改 `autostart-hidden.vbs`）。
+> 若需换端口/绑定地址：同时改 `autostart-hidden.vbs` 里的启动参数。
 
 服务启动后，任何 OpenAI 兼容客户端都能直接调用：
 
@@ -158,6 +174,29 @@ ffmpeg-normalize out.wav -nt ebu -t -19 --lower-only -c:a pcm_s16le -f -o out_no
 
 **关于 RMS vs LUFS**：我一度用 RMS 衡量响度（说"波动 16 倍"），这是不专业的——Google 官方文档明确警告 "Peak level is not a good measure of loudness"。
 LUFS 的本质是 **K-weighting（模拟人耳频率敏感度）+ gating（忽略静音段）**，一个 RMS 高但以高频为主的音频，听感可能比 RMS 低但中频饱满的更轻，而 RMS 完全捕捉不到。
+
+---
+
+## 数字/日期读法（已验证无需预处理）
+
+官方 Python 版依赖 `inflect` / `wetext` 做文本规范化，而 **llama.cpp-omni 这条 C++ 实现里完全没有这一层**（源码搜索 `inflect`/`wetext`/`normalize` 均无结果）。实测确认这不构成问题：
+
+```
+期望:   今天是2026年10月10日,气温25度。RTX 4060显卡性能提升了3.5倍,价格只要5999元。
+听写:   今天是2026年10月10日, 气温25度RTX40060显卡性能提升了3.5倍, 价格只要5999元
+```
+
+日期、数量、小数、价格均正确，仅 `4060` 疑似的偏差也可能是 ASR 自身误识。**VoxCPM2 的 2B 模型本身具备中文数字处理能力，无需额外预处理层。**
+
+如需自己验证：
+
+```powershell
+# 依赖: pip install faster-whisper  (需 HF_ENDPOINT=https://hf-mirror.com)
+powershell tts.ps1 design "(青年男性,标准播音)今天是2026年10月10日。" -Out t.wav
+python tools\verify_tts_text.py t.wav "今天是2026年10月10日。"
+```
+
+> **注意**：必须用 `small` 或更大的 ASR 模型。实测 `tiny` 会把 2026 听成 2016、5999 听成 59999，完全误导判断。
 
 ---
 
