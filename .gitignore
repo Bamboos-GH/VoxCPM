@@ -1,13 +1,34 @@
-launch.json
-.venv/
-__pycache__
-voxcpm.egg-info
-.DS_Store
-./pretrained_models/
-app_local.py
-
-# Docker volume mount directories (large files, user-specific)
+# ── 大文件 / 可重新获取 ──────────────────────────────────────────
+# 模型权重 3.3GB, 可从社区仓库重新下载
 models/
-data/
-lora/
-output/
+*.gguf
+
+# llama.cpp-omni 推理引擎源码(含编译产物 0.74GB)
+# 重新获取: git clone --recursive https://github.com/tc-mb/llama.cpp-omni.git
+# 重新编译: build_voxcpm2.bat
+llama.cpp-omni/
+
+# ── 运行时产物 ──────────────────────────────────────────────────
+logs/
+staging/
+normalized/
+*.pid
+server.log
+server.err
+
+# ── 生成物 ──────────────────────────────────────────────────────
+*.wav
+!示例_*.wav
+smoke_*.wav
+
+# 临时/调试
+dbg*
+*.tmp
+
+# ── Python ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 注意: src/ 是官方 OpenBMB/VoxCPM 源码, 保留跟踪以便对比
