@@ -71,8 +71,9 @@ function Show-Status {
     $hasAuto = Test-Path (Join-Path $startup "$TaskName.lnk")
     Write-Output ("  开机自启 : {0}" -f $(if($hasAuto){"已启用"}else{"未启用"}))
     if (Test-Path $errFile) {
-        $sz = (Get-Item $errFile).Length
-        Write-Output ("  日志     : {0}  ({1:N0} 字节, 更新于 {2})" -f $errFile, $sz, (Get-Item $errFile).LastWriteTime)
+        # 注意: cmd 重定向时 Get-Item.Length 可能读到缓存的 0, 用行数更可靠
+        $lines = @(Get-Content $errFile -ErrorAction SilentlyContinue).Count
+        Write-Output ("  日志     : {0}  ({1} 行, 更新于 {2})" -f $errFile, $lines, (Get-Item $errFile).LastWriteTime)
     } else {
         Write-Output "  日志     : 尚无(首次启动后生成)"
     }
@@ -91,12 +92,23 @@ switch ($Action) {
             if (-not (Test-Path $f)) { throw "缺少文件: $f" }
         }
         New-Item -ItemType Directory -Force $logDir | Out-Null
-        Write-Output "正在启动 $procName (端口 $Port) ..."
-        # 注意: llama-tts-server 的日志走 stderr(echo vlog), stdout 基本为空,
-        #      所以 server.err 才是主日志, server.log 一般保持 0KB。
-        Start-Process -FilePath $exe `
-            -ArgumentList @("--voxcpm2-base-lm", $base, "--voxcpm2-acoustic", $acoustic, "--port", "$Port", "--host", $Bind) `
-            -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errFile | Out-Null
+        Write-Output "正在启动 $procName (端口 $Port, 绑定 $Bind) ..."
+
+        # 用 WMI Win32_Process.Create 启动, 让服务完全脱离本进程的句柄。
+        # 这是必要的: 若用 Start-Process, 服务会继承父进程 stdout 句柄,
+        # 导致调用方写 `service.ps1 start | Select-Object -Last N` 时永久挂起
+        # (-Last 要等管道 EOF, 而常驻服务永远不关句柄)。
+        # cmd /c 包裹以完成标准输出重定向(WMI 自身不支持重定向)。
+        $ps1Log  = Join-Path $logDir "server.log"
+        $ps1Err  = Join-Path $logDir "server.err"
+        $cmd = ('cmd.exe /c ""{0}" --voxcpm2-base-lm "{1}" --voxcpm2-acoustic "{2}" --port {3} --host {4} 1>"{5}" 2>"{6}""' -f `
+                $exe, $base, $acoustic, $Port, $Bind, $ps1Log, $ps1Err)
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine    = $cmd
+            CurrentDirectory = $root
+        }
+        if ($r.ReturnValue -ne 0) { throw "服务启动失败 (WMI ReturnValue=$($r.ReturnValue))" }
+
         $ok = $false
         for ($i = 0; $i -lt 60; $i++) {
             Start-Sleep -Seconds 2
@@ -111,8 +123,8 @@ switch ($Action) {
         if ($ok) {
             Show-Status
             if ($Bind -eq "0.0.0.0") {
-                Write-Output "  [提示] 已绑定 0.0.0.0, 局域网可访问。若外部连不上, 需放行防火墙:" -ForegroundColor Yellow
-                Write-Output "         netsh advfirewall firewall add rule name=`"VoxCPM2-TTS`" dir=in action=allow protocol=tcp localport=$Port" -ForegroundColor Yellow
+                Write-Host "  [提示] 已绑定 0.0.0.0, 局域网可访问。若外部连不上, 需放行防火墙:" -ForegroundColor Yellow
+                Write-Host "         netsh advfirewall firewall add rule name=`"VoxCPM2-TTS`" dir=in action=allow protocol=tcp localport=$Port" -ForegroundColor Yellow
             }
         } else { Write-Error "启动超时(120s), 请检查日志"; exit 1 }
     }
