@@ -1,0 +1,94 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "VoxCPM2 TTS Service (llama.cpp-omni llama-tts-server)",
+    "version": "1.0.0",
+    "description": "T44 手写真源（2026-10-12）：C++ 服务无自动 openapi——本快照=api 侧消费面契约锁的唯一依据，与 DeckTalk services/api/contracts/voxcpm2-openapi.json 同步拷贝。引擎侧变更接口时：改本文件 → 同步拷贝到 api 仓 → api 侧 test_svc_contracts 通过。服务实现=llama-tts-server.exe（引擎仓 llama.cpp-omni 编译产物），快照与实现的符合性由 T44 P0 活体验证（GPU 窗口）。",
+    "x-engine": "VoxCPM2 (OpenBMB fork, Apache-2.0) + llama.cpp-omni (MIT)",
+    "x-port": 8099,
+    "x-consumer-warning": "①/v1/audio/speech/stream 为 chunked 真流式（~320ms WAV/chunk），客户端断开时服务端自动取消后续解码；②合成失败语义在 HTTP 状态码（4xx/5xx），成功恒 200 二进制 WAV；③model 字段当前固定接受 \"voxcpm\"（占位校验）；④音色描述写在 input 开头括号内，克隆走 reference_audio(base64 WAV)；⑤seed 是确定性种子不是音色锁（README_local 实测）。"
+  },
+  "paths": {
+    "/v1/audio/speech": {
+      "post": {
+        "operationId": "synthesize",
+        "summary": "非流式合成：返回完整 WAV（48kHz mono）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SpeechRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "WAV audio",
+            "content": { "audio/wav": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "4XX": { "description": "请求非法（缺 input 等）" },
+          "5XX": { "description": "合成失败" }
+        }
+      }
+    },
+    "/v1/audio/speech/stream": {
+      "post": {
+        "operationId": "synthesizeStream",
+        "summary": "流式合成：chunked WAV 分块传输（客户端断开自动取消）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SpeechRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "chunked WAV stream",
+            "content": { "audio/wav": { "schema": { "type": "string", "format": "binary" } } }
+          }
+        }
+      }
+    },
+    "/v1/audio/speech/models": {
+      "get": {
+        "operationId": "modelsInfo",
+        "summary": "已加载模型信息（健康探活端点：200=服务可用）",
+        "responses": {
+          "200": {
+            "description": "已加载 GGUF 权重信息（结构由服务端自述，消费方只判状态码）",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/v1/voxcpm2/init": {
+      "post": {
+        "operationId": "initWeights",
+        "summary": "动态加载/切换 GGUF 权重（DeckTalk 后端当前不消费，登记备查）",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "加载结果" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SpeechRequest": {
+        "type": "object",
+        "required": ["model", "input"],
+        "properties": {
+          "model": { "type": "string", "enum": ["voxcpm"], "description": "固定 voxcpm（占位）" },
+          "input": { "type": "string", "description": "合成文本；音色描述写在开头括号内，如 '(年轻女性,温柔甜美)你好'" },
+          "voice": { "type": "string", "description": "占位字段（服务端不消费音色库语义）" },
+          "seed": { "type": "integer", "description": "确定性种子（默认 42）；非音色锁" },
+          "cfg_value": { "type": "number", "description": "引导尺度（默认 2.0；2.5~3.0 音色更明显）" },
+          "inference_timesteps": { "type": "integer", "description": "CFM 采样步数（默认 10；16~20 音质更好，6~8 更快）" },
+          "max_steps": { "type": "integer", "description": "最大解码步数（默认 200）" },
+          "temperature": { "type": "number" },
+          "reference_audio": { "type": "string", "description": "base64 WAV 参考音频——提供即克隆模式；配合 prompt_text 为极致克隆（后端当前只消费本字段）" }
+        }
+      }
+    }
+  }
+}
