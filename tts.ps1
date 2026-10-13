@@ -38,8 +38,13 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $cli = Join-Path $root "llama.cpp-omni\build\bin\voxcpm2-cli.exe"
-$base = Join-Path $root "models\VoxCPM2-BaseLM-Q8_0.gguf"
-$acoustic = Join-Path $root "models\VoxCPM2-Acoustic-F16.gguf"
+
+# T49 P1: 模型选择与 service.ps1 同源(active.json + 两层回退)，CLI 模式只在服务未起时用
+$null = . (Join-Path $root "tools\resolve-models.ps1")
+$m = Resolve-VoxCPM2Models -Root $root
+if ($m.Warning) { Write-Warning $m.Warning }
+$base = $m.BaseLm
+$acoustic = $m.Acoustic
 
 if (-not $Out) {
     $stamp = Get-Date -Format "HHmmss"

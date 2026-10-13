@@ -1,6 +1,6 @@
 # ── 大文件 / 可重新获取 ──────────────────────────────────────────
-# 模型权重 3.3GB, 可从社区仓库重新下载
-models/
+# 模型权重(内容忽略, 目录本身不排除——否则 !models/active.json 例外无效, git 不会进入被排除的目录)
+models/*
 *.gguf
 
 # llama.cpp-omni 推理引擎源码(含编译产物 0.74GB)
@@ -32,3 +32,6 @@ __pycache__/
 venv/
 
 # 注意: src/ 是官方 OpenBMB/VoxCPM 源码, 保留跟踪以便对比
+
+# T49 P1: 模型选择器入 git(候选 .gguf 仍忽略)
+!models/active.json

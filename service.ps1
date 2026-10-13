@@ -19,14 +19,25 @@ param(
     [int]$Port = 8099,
     [int]$Tail = 40,
     [string]$Bind = "127.0.0.1",   # 默认仅本机; 设 0.0.0.0 允许局域网访问
+    [string]$BaseLm,              # 模型组合覆盖(可选; 缺省走 active.json -> 默认组合)
+    [string]$Acoustic,
     [string]$TaskName = "VoxCPM2-TTS-Server"
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $exe = Join-Path $root "llama.cpp-omni\build\bin\llama-tts-server.exe"
-$base = Join-Path $root "models\VoxCPM2-BaseLM-Q8_0.gguf"
-$acoustic = Join-Path $root "models\VoxCPM2-Acoustic-F16.gguf"
+$logDir = Join-Path $root "logs"
+$logFile = Join-Path $logDir "server.log"
+$errFile = Join-Path $logDir "server.err"
+$procName = "llama-tts-server"
+$baseUrl = "http://127.0.0.1:$Port"
+
+# T49 P1: 模型选择器(active.json) + 共享解析器(两层回退: 配置缺省 fail-open / 指向缺失 fail-fast)
+$null = . (Join-Path $root "tools\resolve-models.ps1")
+$m = Resolve-VoxCPM2Models -Root $root -BaseLmOverride $BaseLm -AcousticOverride $Acoustic
+$base = $m.BaseLm
+$acoustic = $m.Acoustic
 $logDir = Join-Path $root "logs"
 $logFile = Join-Path $logDir "server.log"
 $errFile = Join-Path $logDir "server.err"
@@ -77,6 +88,9 @@ function Show-Status {
     } else {
         Write-Output "  日志     : 尚无(首次启动后生成)"
     }
+    Write-Output ("  激活模型(下次启动): {0} [来源: {1}]" -f (Split-Path $base -Leaf), $m.Source)
+    Write-Output ("                     {0}" -f (Split-Path $acoustic -Leaf))
+    Write-Output ("  运行中模型: 见日志 BaseLM:/Acoustic: 行（Get-Content {0} | Select-String 'BaseLM:|Acoustic:'）" -f $errFile)
     try {
         $gpu = nvidia-smi --query-gpu=name,memory.used,memory.total,memory.free --format=csv,noheader
         Write-Output "  GPU      : $gpu"
@@ -92,7 +106,10 @@ switch ($Action) {
             if (-not (Test-Path $f)) { throw "缺少文件: $f" }
         }
         New-Item -ItemType Directory -Force $logDir | Out-Null
-        Write-Output "正在启动 $procName (端口 $Port, 绑定 $Bind) ..."
+        if ($m.Warning) {
+            Write-Warning $m.Warning
+        }
+        Write-Output "正在启动 $procName (端口 $Port, 绑定 $Bind, 模型来源 $($m.Source)) ..."
 
         # 用 WMI Win32_Process.Create 启动, 让服务完全脱离本进程的句柄。
         # 这是必要的: 若用 Start-Process, 服务会继承父进程 stdout 句柄,
@@ -142,7 +159,7 @@ switch ($Action) {
     'restart' {
         $p = Get-ServerProc
         if ($p) { $p | Stop-Process -Force; Start-Sleep -Seconds 2 }
-        & $PSCommandPath start -Port $Port -Bind $Bind
+        & $PSCommandPath start -Port $Port -Bind $Bind -BaseLm $BaseLm -Acoustic $Acoustic
     }
 
     'status' { Show-Status }
