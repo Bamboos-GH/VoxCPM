@@ -1,4 +1,4 @@
-{
-  "base_lm": "VoxCPM2-BaseLM-Q4_K_M.gguf",
-  "acoustic": "VoxCPM2-Acoustic-Q8_0.gguf"
+﻿{
+    "base_lm":  "VoxCPM2-BaseLM-Q4_K_M.gguf",
+    "acoustic":  "VoxCPM2-Acoustic-Q8_0.gguf"
 }

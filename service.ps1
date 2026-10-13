@@ -69,8 +69,8 @@ function Show-Status {
         Write-Output ("  API      : {0}  {1}" -f $baseUrl, $(if($up){"在线"}else{"无响应"}))
         if ($up) {
             try {
-                $m = Invoke-RestMethod "$baseUrl/v1/audio/speech/models" -TimeoutSec 5
-                foreach ($d in $m.data) {
+                $api = Invoke-RestMethod "$baseUrl/v1/audio/speech/models" -TimeoutSec 5
+                foreach ($d in $api.data) {
                     Write-Output ("  模型     : {0}  {1}kHz  feat_dim={2}  patch={3}" -f $d.id, ($d.sample_rate/1000), $d.feat_dim, $d.patch_size)
                 }
             } catch { Write-Output "  模型信息 : 读取失败" }
