@@ -1,0 +1,110 @@
+--- a/llama.cpp-omni/tools/server/server-voxcpm2.cpp
++++ b/llama.cpp-omni/tools/server/server-voxcpm2.cpp
+@@ -9,9 +9,12 @@
+ 
+ #include <mutex>
+ #include <thread>
++#include <chrono>
++#include <memory>
+ #include <fstream>
+ #include <string>
+ #include <cstring>
++#include <cstdio>
+ #include <atomic>
+ #include <signal.h>
+ 
+@@ -79,6 +82,13 @@
+     return json{{"error", {{"message", message}, {"type", type}}}};
+ }
+ 
++// T291: single-flight generation. One runtime, one generation at a time.
++static void res_busy(httplib::Response & res, const std::string & what) {
++    res.status = 503;
++    res.set_header("Retry-After", "1");
++    res.set_content(format_error_response("VoxCPM2 busy: " + what, "busy").dump(), "application/json");
++}
++
+ template<typename T>
+ static T json_value(const json & body, const std::string & key, const T & default_value) {
+     if (body.contains(key)) {
+@@ -174,6 +184,8 @@
+ struct voxcpm2_server_state {
+     VoxCPM2Runtime * runtime = nullptr;
+     std::mutex mutex;
++    // T291: serializes prefill/decode across requests; runtime state is shared.
++    std::timed_mutex generation_mutex;
+ };
+ 
+ // ─── Static signal handling ───────────────────────────────────────────────
+@@ -243,6 +255,12 @@
+             return;
+         }
+ 
++        std::unique_lock<std::timed_mutex> gen_lock(state.generation_mutex, std::defer_lock);
++        if (!gen_lock.try_lock_for(std::chrono::seconds(100))) {
++            res_busy(res, "generation in progress");
++            return;
++        }
++
+         {
+             std::lock_guard<std::mutex> lock(state.mutex);
+             if (state.runtime) {
+@@ -296,6 +314,12 @@
+             return;
+         }
+ 
++        std::unique_lock<std::timed_mutex> gen_lock(state.generation_mutex, std::defer_lock);
++        if (!gen_lock.try_lock_for(std::chrono::seconds(100))) {
++            res_busy(res, "generation in progress");
++            return;
++        }
++
+         VoxCPM2GenerateParams gen_params;
+         gen_params.seed                = json_value(data, "seed", 42);
+         gen_params.cfg_value           = json_value(data, "cfg_value", 2.0f);
+@@ -379,6 +403,13 @@
+             return;
+         }
+ 
++        auto gen_lock = std::make_shared<std::unique_lock<std::timed_mutex>>(
++            state.generation_mutex, std::defer_lock);
++        if (!gen_lock->try_lock_for(std::chrono::seconds(2))) {
++            res_busy(res, "another stream is in progress");
++            return;
++        }
++
+         VoxCPM2GenerateParams gen_params;
+         gen_params.seed                = json_value(data, "seed", 42);
+         gen_params.cfg_value           = json_value(data, "cfg_value", 2.0f);
+@@ -398,9 +429,19 @@
+ 
+         int sr = rt->sample_rate();
+ 
++        auto gen_started = std::make_shared<std::atomic<bool>>(false);
+         res.set_chunked_content_provider(
+             "audio/wav",
+-            [rt, input, gen_params, sr, data](size_t /*offset*/, httplib::DataSink & sink) -> bool {
++            [rt, input, gen_params, sr, data, gen_lock, gen_started](size_t /*offset*/, httplib::DataSink & sink) -> bool {
++                if (gen_started->exchange(true)) {
++                    return false;
++                }
++                struct GenerationUnlock {
++                    std::shared_ptr<std::unique_lock<std::timed_mutex>> lock;
++                    ~GenerationUnlock() {
++                        if (lock && lock->owns_lock()) { lock->unlock(); }
++                    }
++                } unlock_guard{gen_lock};
+                 // Write WAV header first (with unknown data size)
+                 {
+                     std::string header;
+@@ -554,6 +595,10 @@
+ 
+     LOG_INF("VoxCPM2 TTS server is listening on http://%s:%d\n", params.hostname.c_str(), params.port);
+ 
++    // T291: make the single-flight policy observable in the managed engine log.
++    fprintf(stderr, "[voxcpm2] single-flight generation lock enabled: stream_wait=2s batch_wait=100s\n");
++    fflush(stderr);
++
+     // ── Signal handling ───────────────────────────────────────────────────
+ 
+     std::atomic<bool> running{true};
