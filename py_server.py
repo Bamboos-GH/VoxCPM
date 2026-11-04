@@ -80,6 +80,15 @@ def _load(model_dir: Path):
         except Exception:
             pass
         print(f"[py_server] model ready (sr={_SAMPLE_RATE})", flush=True)
+        # ★真实输出率以模型实例为准：wrapper 持 tts_model（VoxCPM2Model.sample_rate =
+        # audio_vae.out_sample_rate = 48000）；config 顶层 16000 是**编码率**——写错头
+        # 会让时长虚胖 3 倍、RTF 虚假劣化（实测踩过）。
+        for holder in (_MODEL, getattr(_MODEL, "tts_model", None)):
+            sr = getattr(holder, "sample_rate", None)
+            if sr:
+                _SAMPLE_RATE = int(sr)
+                break
+        print(f"[py_server] output sample_rate corrected → {_SAMPLE_RATE}", flush=True)
         return _MODEL
 
 
